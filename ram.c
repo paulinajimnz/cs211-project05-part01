@@ -20,6 +20,30 @@
 
 #include "ram.h"
 
+/**
+ * @brief double_memory:
+ * 
+ * when size >= capacity, doubles capcity of RAM
+ * 
+ * @param memory
+ * 
+ * @return void
+ */
+static void double_memory(struct RAM* memory) 
+{
+  int old_capacity = memory->capacity;
+  memory->capacity = memory->capacity * 2;
+
+  memory->cells = (struct RAM_VALUE*) realloc(memory->cells, memory->capacity * sizeof(struct RAM_VALUE));
+  memory->map = (struct RAM_MAP*) realloc(memory->map, memory->capacity * sizeof(struct RAM_MAP));
+
+  for(int i = old_capacity; i < memory->capacity; i++) {
+    memory->map[i].varname = NULL;
+    memory->cells[i].value_type = RAM_TYPE_NONE;
+  }
+
+  return;
+}
 
 //
 // Public functions:
@@ -38,7 +62,18 @@
   */
 struct RAM* ram_init(void)
 {
-  return NULL;
+  struct RAM* memory = (struct RAM*) malloc(sizeof(struct RAM));
+  memory->size = 0;
+  memory->capacity = 4;
+  memory->cells = (struct RAM_VALUE*) malloc(memory->capacity * sizeof(struct RAM_VALUE));
+  memory->map = (struct RAM_MAP*) malloc(memory->capacity * sizeof(RAM_MAP));
+
+  for (int i = 0; i < memory->capacity; i++) {
+    memory->map[i].varname = NULL;
+    memory->cells[i].value_type = RAM_TYPE_NONE;
+  }
+
+  return memory;
 }
 
 
@@ -53,6 +88,16 @@ struct RAM* ram_init(void)
   */
 void ram_destroy(struct RAM* memory)
 {
+  for(int i=0; i < memory->size; i++) {
+    if(memory->cells[i].value_type == RAM_TYPE_STR && memory->cells[i].types.s != NULL) {
+      free(memory->cells[i].types.s);
+    }
+    free(memory->map[i].varname);
+  }
+  free(memory->cells);
+  free(memory->map);
+  free(memory);
+
   return;
 }
 
@@ -66,7 +111,7 @@ void ram_destroy(struct RAM* memory)
   */
 int ram_size(struct RAM* memory)
 {
-  return -1;
+  return memory->size;
 }
 
 
@@ -79,7 +124,7 @@ int ram_size(struct RAM* memory)
   */
 int ram_capacity(struct RAM* memory)
 {
-  return -1;
+  return memory->capacity;
 }
 
 
@@ -102,6 +147,26 @@ int ram_capacity(struct RAM* memory)
   */
 int ram_get_addr(struct RAM* memory, char* varname)
 {
+  if (memory == NULL || varname == NULL)
+    return -1;
+  
+  //binary seacrh over the sorted map 
+  int left = 0;
+  int right = memory->size - 1;
+  int c;
+
+  while (left <= right) {
+    int mid = (left + right) / 2;
+    c = strcmp(varname, memory->map[mid].varname);    
+    
+    if (c == 0)
+      return memory->map[mid].cell;
+    else if (c < 0)
+      right = mid - 1; //search left half
+    else 
+      left = mid + 1; //search right half
+  }
+  
   return -1;
 }
 
@@ -127,7 +192,27 @@ int ram_get_addr(struct RAM* memory, char* varname)
   */
 struct RAM_VALUE* ram_read_cell_by_addr(struct RAM* memory, int address)
 {
-  return NULL;
+  if (memory == NULL)
+    return NULL;
+    
+  if(address < memory->size && address >= 0) {
+    struct RAM_VALUE* copy = (struct RAM_VALUE*) malloc (sizeof(struct RAM_VALUE));
+    copy->types.s = strdup(memory->cells[address].types.s);
+    //copy->value_type = memory->cells[address].value_type;
+    if (memory->cells[address].value_type == RAM_TYPE_STR) {
+      copy->types.s = strdup(memory->cells[address].types.s);
+    }
+    else if (memory->cells[address].value_type == RAM_TYPE_REAL){
+        copy->types.d = memory->cells[address].types.d;
+    }
+    else {
+      copy->types.i = memory->cells[address].types.i;
+    }
+    return copy;
+  }
+  else {
+    return NULL;
+  }
 }
 
 
@@ -148,6 +233,25 @@ struct RAM_VALUE* ram_read_cell_by_addr(struct RAM* memory, int address)
   */
 struct RAM_VALUE* ram_read_cell_by_name(struct RAM* memory, char* varname)
 {
+  for(int i=0; i < memory->size; i++) {
+    if (strcmp(varname, memory->map[i].varname) == 0) {
+      struct RAM_VALUE* copy = (struct RAM_VALUE*) malloc(sizeof(struct RAM_VALUE));
+      int address = memory->map[i].cell;
+      copy->value_type = memory->cells[address].value_type;
+
+      if(memory->cells[address].value_type == RAM_TYPE_STR){
+        copy->types.s = strdup(memory->cells[address].types.s);
+        //copy->types.s = memory->cells[i].types.s;
+      }
+      else if (memory->cells[address].value_type == RAM_TYPE_REAL){
+        copy->types.d = memory->cells[address].types.d;
+      }
+      else {
+        copy->types.i = memory->cells[address].types.i;
+      }
+      return copy;
+    }
+  }
   return NULL;
 }
 
@@ -163,6 +267,13 @@ struct RAM_VALUE* ram_read_cell_by_name(struct RAM* memory, char* varname)
   */
 void ram_free_value(struct RAM_VALUE* value)
 {
+  if(value == NULL){
+    return;
+  }
+  if(value->value_type == RAM_TYPE_STR) {
+    free(value->types.s);
+  }
+  free(value);
   return;
 }
 
@@ -190,7 +301,30 @@ void ram_free_value(struct RAM_VALUE* value)
   */
 bool ram_write_cell_by_addr(struct RAM* memory, struct RAM_VALUE value, int address)
 {
-  return false;
+  if (memory == NULL)
+    return false;
+  // if overwriting a string, free the old one
+  if (address < memory->capacity && address >= 0) {
+    if (memory->cells[address].value_type == RAM_TYPE_STR && memory->cells[address].types.s != NULL) {
+      free(memory->cells[address].types.s);
+    }
+
+    memory->cells[address].value_type = value.value_type;
+
+    if(memory->cells[address].value_type == RAM_TYPE_STR) {
+      memory->cells[address].types.s = strdup(value.types.s);
+    }
+    else if (memory->cells[address].value_type == RAM_TYPE_REAL) {
+      memory->cells[address].types.d = value.types.d;
+    }
+    else {
+      memory->cells[address].types.i = value.types.i;
+    }
+    return true;
+  }
+  else {
+    return false;
+  }
 }
 
 
@@ -216,8 +350,38 @@ bool ram_write_cell_by_addr(struct RAM* memory, struct RAM_VALUE value, int addr
   */
 bool ram_write_cell_by_name(struct RAM* memory, struct RAM_VALUE value, char* varname)
 {
-  return false;
+  // check if var already exists
+  int address = ram_get_addr(memory, varname);
+  if (address != -1) {
+    ram_write_cell_by_addr(memory, value, address);
+    return true;
+  }
+
+  // Double memory if capacity = size
+  if (memory->size >= memory->capacity) 
+    double_memory(memory);
+
+  // Store var alphabetically
+  int index = 0;
+  while (index < memory->size && strcmp(varname, memory->map[index].varname) > 0) {
+    index++;
+  }
+
+  for (int i= memory->size; i > index; i--) {
+    memory->map[i] = memory->map[i - 1];
+  }
+
+  memory->map[index].varname = strdup(varname);
+  memory->map[index].cell = memory->size;
+
+  ram_write_cell_by_addr(memory, value, memory->size);
+
+  memory->size++;
+
+  return true;
+
 }
+
 
 
 /**
@@ -233,24 +397,38 @@ void ram_print(struct RAM* memory)
 {
   printf("**MEMORY PRINT**\n");
 
-  //printf("Size: %d\n", ?);
-  //printf("Capacity: %d\n", ?);
-  //printf("Contents:\n");
+  printf("Size: %d\n", memory->size);
+  printf("Capacity: %d\n", memory->capacity);
+  printf("Contents:\n");
 
-  //for (int i = 0; i < ???; i++)
-  //{
-  //  printf(" %s: ", ???->varname);
-  //
-  //  printf("int, %d", value?);
-  //  printf("real, %lf", value?);
-  //  printf("str, '%s'", value?);
-  //  printf("ptr, %d", value?);
-  //  printf("boolean, False");
-  //  printf("boolean, True");
-  //  printf("none, None");
-  //
-  //  printf("\n");
-  //}
+  for (int i = 0; i < memory->size; i++)
+  {
+   printf(" %s: ", memory->map[i].varname);
+
+   if (memory->cells[i].value_type == RAM_TYPE_INT) {
+    printf("int, %d", memory->cells[i].types.i);
+   }
+   else if (memory->cells[i].value_type == RAM_TYPE_REAL) {
+    printf("real, %lf", memory->cells[i].types.d);
+   }
+   else if (memory->cells[i].value_type == RAM_TYPE_STR) {
+    printf("str, '%s'", memory->cells[i].types.s);
+   }
+   else if (memory->cells[i].value_type == RAM_TYPE_PTR) {
+    printf("ptr, %d", memory->cells[i].types.i);
+   }
+   else if(memory->cells[i].value_type == RAM_TYPE_BOOLEAN) {
+    if (memory->cells[i].types.i == 0)
+      printf("boolean, False");
+    else
+      printf("boolean, True");
+   }
+   else {
+   printf("none, None");
+   }
+  
+   printf("\n");
+  }
 
   printf("**END PRINT**\n");
 }
@@ -268,10 +446,10 @@ void ram_print_map(struct RAM* memory)
 {
   printf("**MEMORY MAP PRINT**\n");
 
-  //for (int i = 0; i < ???; i++)
-  //{
-  //  printf(" %s: %d\n", varname?, cell?);
-  //}
+  for (int i = 0; i < memory->size; i++)
+  {
+   printf(" %s: %d\n", memory->map[i].varname, memory->map[i].cell);
+  }
 
   printf("**END PRINT**\n");
 }
